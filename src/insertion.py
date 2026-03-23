@@ -1,4 +1,5 @@
 import cv2
+import json
 import os
 import random
 from typing import List, Optional
@@ -8,6 +9,9 @@ try:
 	from src.encrypt import A51
 except ImportError:
 	from encrypt import A51
+
+
+MAGIC = b"STEG"
 
 
 def bytes_to_bits(data: bytes) -> List[int]:
@@ -20,33 +24,35 @@ def bytes_to_bits(data: bytes) -> List[int]:
 
 def build_payload(
 	secret_path: str,
+	payload_type: str,
 	encrypt_payload: bool,
 	a51_key: Optional[str],
 	mode: str,
 ) -> bytes:
 	with open(secret_path, "rb") as f:
-		secret_data = f.read()
+		payload_bytes = f.read()
 
-	secret_size = len(secret_data)
-	secret_ext = os.path.splitext(secret_path)[1][1:]
-	secret_name = os.path.basename(secret_path)
-	is_file = True
+	norm_type = "file" if payload_type == "file" else "text"
+	file_name = os.path.basename(secret_path) if norm_type == "file" else ""
 
 	if encrypt_payload:
-		secret_data = A51(a51_key).encrypt(secret_data)
+		payload_bytes = A51(a51_key).encrypt(payload_bytes)
+
+	metadata = {
+		"type": norm_type,
+		"filename": file_name,
+		"size": len(payload_bytes),
+		"encrypted": bool(encrypt_payload),
+		"mode": "random" if mode == "random" else "sequential",
+	}
+	meta_bytes = json.dumps(metadata).encode("utf-8")
 
 	header = bytearray()
-	header += b"STEG"
-	header += (b"1" if is_file else b"0")
-	header += bytes([len(secret_ext)])
-	header += secret_ext.encode()
-	header += bytes([len(secret_name)])
-	header += secret_name.encode()
-	header += secret_size.to_bytes(4, "big")
-	header += (b"1" if encrypt_payload else b"0")
-	header += (b"1" if mode == "random" else b"0")
+	header += MAGIC
+	header += len(meta_bytes).to_bytes(4, "big")
+	header += meta_bytes
 
-	return bytes(header) + secret_data
+	return bytes(header) + payload_bytes
 
 
 def read_video_frames(video_path: str):
@@ -109,8 +115,23 @@ def embed_payload_bits(
 		bit_index += bits_this_frame
 
 
-def write_video_frames(output_path: str, fps: float, width: int, height: int, frames):
+def write_video_frames(
+	output_path: str,
+	fps: float,
+	width: int,
+	height: int,
+	frames,
+	preferred_codec: Optional[str] = None,
+):
+	if not output_path:
+		raise ValueError("Output path video stego kosong")
+	parent = os.path.dirname(output_path)
+	if parent:
+		os.makedirs(parent, exist_ok=True)
 	codec_candidates = ["FFV1", "HFYU"]
+	if preferred_codec:
+		# Try the preferred codec first while still falling back to defaults.
+		codec_candidates = [preferred_codec] + [c for c in codec_candidates if c != preferred_codec]
 	out = None
 	selected_codec = None
 
@@ -137,16 +158,18 @@ def insert_message_to_video(
 	video_path: str,
 	secret_path: str,
 	output_path: str,
+	payload_type: str = "file",
 	encrypt_payload: bool = False,
 	a51_key: Optional[str] = None,
 	mode: str = "sequential",
-	stego_key: Optional[str] = None
+	stego_key: Optional[str] = None,
+	preferred_codec: Optional[str] = None,
 ):
 
-	payload = build_payload(secret_path, encrypt_payload, a51_key, mode)
+	payload = build_payload(secret_path, payload_type, encrypt_payload, a51_key, mode)
 	payload_bits = bytes_to_bits(payload)
 	frames, fps, width, height = read_video_frames(video_path)
 	embed_payload_bits(frames, payload_bits, mode, stego_key)
-	write_video_frames(output_path, fps, width, height, frames)
+	write_video_frames(output_path, fps, width, height, frames, preferred_codec=preferred_codec)
 
 	print(f"Penyisipan selesai. Stego-video: {output_path}")

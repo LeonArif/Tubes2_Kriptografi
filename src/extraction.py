@@ -1,3 +1,4 @@
+import json
 import os
 import random
 from dataclasses import dataclass
@@ -16,8 +17,7 @@ MAGIC = b"STEG"
 
 @dataclass
 class PayloadHeader:
-	is_file: bool
-	file_ext: str
+	payload_type: str
 	file_name: str
 	payload_size: int
 	is_encrypted: bool
@@ -126,6 +126,7 @@ def read_bits_by_mode(
 	return bits
 
 
+
 def parse_header(
 	lsb_stream: List[int],
 	mode: str,
@@ -153,21 +154,27 @@ def parse_header(
 	if magic != MAGIC:
 		raise ValueError("Magic header tidak cocok")
 
-	is_file = read_bytes(1) == b"1"
-	ext_len = int.from_bytes(read_bytes(1), "big")
-	file_ext = read_bytes(ext_len).decode("utf-8", errors="replace") if ext_len > 0 else ""
-	name_len = int.from_bytes(read_bytes(1), "big")
-	file_name = read_bytes(name_len).decode("utf-8", errors="replace") if name_len > 0 else ""
-	payload_size = int.from_bytes(read_bytes(4), "big")
-	is_encrypted = read_bytes(1) == b"1"
-	is_random_mode = read_bytes(1) == b"1"
+	meta_len = int.from_bytes(read_bytes(4), "big")
+	if meta_len <= 0:
+		raise ValueError("Metadata kosong")
+	meta_bytes = read_bytes(meta_len)
+	try:
+		meta = json.loads(meta_bytes.decode("utf-8"))
+	except Exception as exc:
+		raise ValueError("Gagal membaca metadata payload") from exc
 
+	payload_type = meta.get("type", "text")
+	file_name = meta.get("filename", "")
+	payload_size = int(meta.get("size", 0))
+	is_encrypted = bool(meta.get("encrypted", False))
+	is_random_mode = meta.get("mode", "sequential") == "random"
+
+	payload_type = payload_type if payload_type in {"text", "file"} else "text"
 	if payload_size < 0:
 		raise ValueError("Ukuran payload tidak valid")
 
 	header = PayloadHeader(
-		is_file=is_file,
-		file_ext=file_ext,
+		payload_type=payload_type,
 		file_name=file_name,
 		payload_size=payload_size,
 		is_encrypted=is_encrypted,
@@ -250,30 +257,10 @@ def extract_message_from_video(
 	if selected_header.is_encrypted:
 		payload_bytes = A51(a51_key).decrypt(payload_bytes)
 
-	if selected_header.is_file:
-		default_name = selected_header.file_name
-		if not default_name:
-			ext_suffix = f".{selected_header.file_ext}" if selected_header.file_ext else ".bin"
-			default_name = f"extracted{ext_suffix}"
-
-		if save_as_path is None:
-			os.makedirs(output_dir, exist_ok=True)
-			candidate_default = os.path.join(output_dir, default_name)
-			if prompt_save_as:
-				try:
-					typed_path = input(f"Save as: ").strip()
-				except EOFError:
-					typed_path = ""
-				save_as_path = normalize_save_path(typed_path, output_dir, candidate_default)
-			else:
-				save_as_path = candidate_default
-		else:
-			save_as_path = normalize_save_path(save_as_path, output_dir, save_as_path)
-
-		parent = os.path.dirname(save_as_path)
-		if parent:
-			os.makedirs(parent, exist_ok=True)
-
+	if selected_header.payload_type == "file":
+		desired_name = selected_header.file_name or "extracted.bin"
+		save_as_path = os.path.join(output_dir, desired_name)
+		os.makedirs(os.path.dirname(save_as_path), exist_ok=True)
 		with open(save_as_path, "wb") as f:
 			f.write(payload_bytes)
 
@@ -281,22 +268,27 @@ def extract_message_from_video(
 		return {
 			"type": "file",
 			"path": save_as_path,
-			"default_name": default_name,
+			"filename": desired_name,
 			"encrypted": selected_header.is_encrypted,
 			"mode": "random" if selected_header.is_random_mode else "sequential",
 		}
 
-	text = payload_bytes.decode("utf-8", errors="replace")
-	text_output_path = build_unique_text_path(output_dir, stego_video_path)
+	try:
+		text_content = payload_bytes.decode("utf-8")
+	except UnicodeDecodeError as exc:
+		raise ValueError("Gagal decode payload sebagai UTF-8") from exc
+
+	text_output_path = os.path.join(output_dir, "result.txt")
+	os.makedirs(os.path.dirname(text_output_path), exist_ok=True)
 	with open(text_output_path, "w", encoding="utf-8") as f:
-		f.write(text)
+		f.write(text_content)
 
 	print("Pesan teks hasil ekstraksi:")
-	print(text)
+	print(text_content)
 	print(f"Pesan teks disimpan di: {text_output_path}")
 	return {
 		"type": "text",
-		"text": text,
+		"content": text_content,
 		"path": text_output_path,
 		"encrypted": selected_header.is_encrypted,
 		"mode": "random" if selected_header.is_random_mode else "sequential",

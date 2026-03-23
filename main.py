@@ -63,6 +63,7 @@ if pilihan == "1":
         video_path=video_path,
         secret_path=temp_secret_path,
         output_path=output_path,
+        payload_type="text",
         encrypt_payload=encrypt_payload,
         a51_key=a51_key,
         mode=mode,
