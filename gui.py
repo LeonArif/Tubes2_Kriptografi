@@ -2,6 +2,7 @@ import os
 import sys
 import tempfile
 import cv2
+import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
 from src.insertion import insert_message_to_video
 from src.extraction import extract_message_from_video
@@ -32,7 +33,7 @@ def show_video_preview(parent: QtWidgets.QWidget, path: str):
 
 
 class EmbedWorker(QtCore.QThread):
-    finished = QtCore.pyqtSignal(str)
+    finished = QtCore.pyqtSignal(dict)
     error = QtCore.pyqtSignal(str)
 
     def __init__(
@@ -76,7 +77,7 @@ class EmbedWorker(QtCore.QThread):
             else:
                 secret_path = self.file_path
 
-            insert_message_to_video(
+            result = insert_message_to_video(
                 video_path=self.video_path,
                 secret_path=secret_path,
                 output_path=output_path,
@@ -88,7 +89,7 @@ class EmbedWorker(QtCore.QThread):
                 preferred_codec=self.codec,
             )
 
-            self.finished.emit(output_path)
+            self.finished.emit(result)
         except Exception as exc:
             self.error.emit(str(exc))
         finally:
@@ -252,6 +253,22 @@ class EmbedTab(QtWidgets.QWidget):
         comparison_layout.addWidget(comparison_title)
         comparison_layout.addLayout(orig_block)
         comparison_layout.addLayout(stego_block)
+        comparison_widget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+
+        self.metrics_label = QtWidgets.QLabel("MSE: - | PSNR: - dB | Capacity: - / Payload: -")
+        self.metrics_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.metrics_label.setObjectName("metricsLabel")
+        self.metrics_label.setStyleSheet("font-weight: 600; color: #3F3A33;")
+
+        hist_widget = QtWidgets.QWidget(); hist_widget.setObjectName("histCard")
+        hist_layout = QtWidgets.QVBoxLayout(hist_widget); hist_layout.setContentsMargins(16, 12, 16, 12); hist_layout.setSpacing(10)
+        hist_title = QtWidgets.QLabel("〽 RGB Histogram 〽"); hist_title.setAlignment(QtCore.Qt.AlignCenter); hist_title.setObjectName("sectionTitle"); hist_title.setStyleSheet("background: transparent; color: #FBF5DB;")
+        hist_orig_block, self.orig_hist_label, _ = self._create_preview_column("Original Histogram", "Original histogram will appear here")
+        hist_stego_block, self.stego_hist_label, _ = self._create_preview_column("Stego Histogram", "Stego histogram will appear here")
+        hist_layout.addWidget(hist_title)
+        hist_layout.addLayout(hist_orig_block)
+        hist_layout.addLayout(hist_stego_block)
+        hist_widget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
 
         form = QtWidgets.QFormLayout(); form.setSpacing(12); form.setFieldGrowthPolicy(QtWidgets.QFormLayout.AllNonFixedFieldsGrow)
         form.addRow("Select Video:", file_row); form.addRow("Payload type:", payload_choice); form.addRow("Payload:", payload_container)
@@ -265,8 +282,17 @@ class EmbedTab(QtWidgets.QWidget):
         title = QtWidgets.QLabel("✿ Embed Message ✉︎ "); title.setObjectName("sectionTitle"); title.setAlignment(QtCore.Qt.AlignLeft)
         [left_layout.addWidget(title), left_layout.addLayout(form), left_layout.addWidget(self.progress)]
 
-        right_widget = QtWidgets.QWidget(); right_layout = QtWidgets.QVBoxLayout(right_widget); right_layout.setContentsMargins(0, 0, 0, 0); right_layout.setSpacing(0)
-        right_layout.addWidget(comparison_widget)
+        right_widget = QtWidgets.QWidget(); right_layout = QtWidgets.QVBoxLayout(right_widget); right_layout.setContentsMargins(0, 0, 0, 0); right_layout.setSpacing(8)
+        right_layout.addWidget(self.metrics_label)
+
+        self.comp_hist_layout = QtWidgets.QBoxLayout(QtWidgets.QBoxLayout.LeftToRight)
+        self.comp_hist_layout.setSpacing(12)
+        self.comp_hist_layout.setContentsMargins(0, 0, 0, 0)
+        self.comp_hist_layout.addWidget(comparison_widget, 1)
+        self.comp_hist_layout.addWidget(hist_widget, 1)
+        row_container = QtWidgets.QWidget(); row_container.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        row_container.setLayout(self.comp_hist_layout)
+        right_layout.addWidget(row_container)
 
         main_split = QtWidgets.QHBoxLayout(); main_split.setSpacing(16); main_split.addWidget(left_widget, 2); main_split.addWidget(right_widget, 3)
 
@@ -287,6 +313,12 @@ class EmbedTab(QtWidgets.QWidget):
         ]:
             sig.connect(slot)
         self._update_payload_type()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "comp_hist_layout"):
+            direction = QtWidgets.QBoxLayout.LeftToRight if self.width() >= 820 else QtWidgets.QBoxLayout.TopToBottom
+            self.comp_hist_layout.setDirection(direction)
 
     def _toggle_encrypt(self, checked: bool):
         self.encrypt_key_edit.setEnabled(checked)
@@ -323,6 +355,49 @@ class EmbedTab(QtWidgets.QWidget):
         layout.addWidget(info_label)
 
         return layout, preview_label, info_label
+
+    def _render_histogram(self, hist_data: dict) -> QtGui.QPixmap:
+        canvas_h, canvas_w = 180, 256
+        img = np.zeros((canvas_h, canvas_w, 3), dtype=np.uint8)
+        if not hist_data:
+            qimg = QtGui.QImage(img.data, canvas_w, canvas_h, 3 * canvas_w, QtGui.QImage.Format_RGB888).copy()
+            return QtGui.QPixmap.fromImage(qimg)
+
+        max_val = 0
+        for key in ("b", "g", "r"):
+            arr = hist_data.get(key)
+            if arr is not None and len(arr) > 0:
+                max_val = max(max_val, int(max(arr)))
+
+        colors = {"b": (255, 0, 0), "g": (0, 255, 0), "r": (0, 0, 255)}
+        max_val = max_val or 1
+        for key in ("b", "g", "r"):
+            arr = hist_data.get(key)
+            if arr is None:
+                continue
+            values = np.array(arr[:256], dtype=np.float32)
+            values = values / max_val
+            for x in range(1, min(256, len(values))):
+                y1 = canvas_h - 1 - int(values[x - 1] * (canvas_h - 5))
+                y2 = canvas_h - 1 - int(values[x] * (canvas_h - 5))
+                cv2.line(img, (x - 1, y1), (x, y2), colors[key], 1)
+
+        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        qimg = QtGui.QImage(rgb.data, canvas_w, canvas_h, 3 * canvas_w, QtGui.QImage.Format_RGB888).copy()
+        return QtGui.QPixmap.fromImage(qimg)
+
+    def _update_metrics(self, metrics: dict):
+        if not metrics:
+            return
+        capacity = metrics.get("capacity_bits", 0)
+        payload = metrics.get("payload_bits", 0)
+        mse = metrics.get("mse", 0.0)
+        psnr = metrics.get("psnr", 0.0)
+        self.metrics_label.setText(
+            f"MSE: {mse:.6f} | PSNR: {psnr:.2f} dB | Capacity: {capacity} bit / Payload: {payload} bit"
+        )
+        self.orig_hist_label.setPixmap(self._render_histogram(metrics.get("hist_original")))
+        self.stego_hist_label.setPixmap(self._render_histogram(metrics.get("hist_stego")))
 
     def _pick_payload_file(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
@@ -515,9 +590,11 @@ class EmbedTab(QtWidgets.QWidget):
         for widget in widgets:
             widget.setEnabled(enabled)
 
-    def _on_embed_finished(self, output_path: str):
+    def _on_embed_finished(self, result: dict):
         self._set_busy(False)
         self.embed_worker = None
+        output_path = result.get("output_path", "") if isinstance(result, dict) else ""
+        self._update_metrics(result if isinstance(result, dict) else {})
         self._start_comparison_preview(original_path=self.video_path_edit.text().strip(), stego_path=output_path)
         QtWidgets.QMessageBox.information(
             self,
@@ -710,7 +787,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("➤ II4021 - Kriptografi ✉︎")
-        self.setFixedSize(900, 700)
+        self.resize(1200, 760)
+        self.setMinimumSize(960, 700)
         self._apply_style()
         self._build_ui()
 
@@ -753,6 +831,12 @@ class MainWindow(QtWidgets.QMainWindow):
             #comparisonCard {
                 background: #C8DAA6;
                 border: 1.5px solid #76944C;
+                border-radius: 12px;
+            }
+
+            #histCard {
+                background: #C8DAA6;
+                border: 1.5px dashed #76944C;
                 border-radius: 12px;
             }
 

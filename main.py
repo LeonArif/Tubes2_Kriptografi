@@ -59,7 +59,7 @@ if pilihan == "1":
         if stego_key is None:
             stego_key = ""
 
-    insert_message_to_video(
+    metrics = insert_message_to_video(
         video_path=video_path,
         secret_path=temp_secret_path,
         output_path=output_path,
@@ -74,6 +74,11 @@ if pilihan == "1":
         os.remove(temp_secret_path)
 
     print(f"Stego-video tersimpan di: {output_path}")
+    if isinstance(metrics, dict):
+        print(
+            f"Ringkasan: kapasitas {metrics.get('capacity_bits', 0)} bit, payload {metrics.get('payload_bits', 0)} bit, "
+            f"MSE {metrics.get('mse', 0):.6f}, PSNR {metrics.get('psnr', 0):.2f} dB"
+        )
 
 elif pilihan == "2":
     stego_name = input("Nama file stego yang ingin diextract: ").strip()
