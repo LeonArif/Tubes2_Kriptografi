@@ -6,6 +6,7 @@ import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
 from src.insertion import insert_message_to_video
 from src.extraction import extract_message_from_video
+from gui_mp4_tab import Mp4BonusTab
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 VIDEO_DIR = os.path.join(BASE_DIR, "video")
@@ -799,6 +800,7 @@ class MainWindow(QtWidgets.QMainWindow):
         tabs = QtWidgets.QTabWidget()
         tabs.addTab(EmbedTab(), "⌯⌲ Embed")
         tabs.addTab(ExtractTab(), "🗁 Extract")
+        tabs.addTab(Mp4BonusTab(), "[◉°] MP4 Bonus")
         layout = QtWidgets.QVBoxLayout()
         layout.addWidget(header)
         layout.addStretch(1)
