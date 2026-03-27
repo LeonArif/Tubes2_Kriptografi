@@ -3,7 +3,7 @@ import shutil
 import tempfile
 import cv2
 from PyQt5 import QtCore, QtGui, QtWidgets
-from gui import (PrimaryButton, show_video_preview, create_preview_column, StegoWorker, BASE_DIR, OUTPUT_VIDEO_DIR, OUTPUT_MESSAGE_DIR, frame_to_pixmap, create_hist_panel, update_metrics_ui,)
+from gui import (PrimaryButton, show_video_preview, create_preview_column, StegoWorker, BASE_DIR, OUTPUT_VIDEO_DIR, OUTPUT_MESSAGE_DIR, frame_to_pixmap, create_hist_panel, update_metrics_ui, estimate_payload_bits,)
 
 try:
     from src.mp4_steganography import (
@@ -290,12 +290,32 @@ class Mp4EmbedTab(QtWidgets.QWidget):
         if invalid_input:
             return self._input_error()
 
+        try:
+            cap_bytes = get_mp4_capacity(video_path)
+            capacity_bits = cap_bytes * 8
+            payload_bits = estimate_payload_bits(payload_type, text_content, file_payload, encrypt_payload, mode)
+            if payload_bits > capacity_bits:
+                self._show_capacity_warning(capacity_bits, payload_bits)
+                return
+        except Exception:
+            pass
+
         self._stop_comparison_preview()
         self._set_busy(True)
         self.embed_worker = StegoWorker(insert_message_to_mp4, video_path=video_path, payload_type=payload_type, text_content=text_content, file_path=file_payload, encrypt_payload=encrypt_payload, a51_key=a51_key, mode=mode, stego_key=stego_key, output_dir=OUTPUT_VIDEO_DIR, output_ext="_stego_mp4.mp4")
         self.embed_worker.finished.connect(self._on_embed_finished)
         self.embed_worker.error.connect(self._on_embed_error)
         self.embed_worker.start()
+
+    def _show_capacity_warning(self, capacity_bits: int, payload_bits: int):
+        cap_bytes = capacity_bits / 8
+        pay_bytes = payload_bits / 8
+        QtWidgets.QMessageBox.warning(
+            self,"Payload melebihi kapasitas",
+            (f"Payload ({pay_bytes:,.0f} bytes) lebih besar dari kapasitas video ({cap_bytes:,.0f} bytes).\n"
+                "Kurangi ukuran pesan atau pilih video dengan kapasitas lebih besar."
+            ),
+        )
 
     def _stop_comparison_preview(self):
         if self.preview_timer.isActive():
@@ -372,9 +392,19 @@ class Mp4EmbedTab(QtWidgets.QWidget):
     def _on_embed_error(self, message: str):
         self._set_busy(False)
         self.embed_worker = None
-        QtWidgets.QMessageBox.critical(
-            self, "Error",
-            f"Something went wrong. Please check your input.\n{message}")
+        warn_prefix = "Payload terlalu besar"
+        if message and warn_prefix.lower() in message.lower():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Payload melebihi kapasitas",
+                "Payload lebih besar dari kapasitas video. Kurangi ukuran pesan atau pilih video dengan kapasitas lebih besar.\n\n" + message,
+            )
+        else:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Error",
+                f"Something went wrong. Please check your input.\n{message}",
+            )
 
 class Mp4ExtractTab(QtWidgets.QWidget):
     def __init__(self, parent=None):

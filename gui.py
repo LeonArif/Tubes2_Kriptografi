@@ -1,10 +1,11 @@
 import os
 import sys
+import json
 import tempfile
 import cv2
 import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
-from src.insertion import insert_message_to_video
+from src.insertion import insert_message_to_video, MAGIC
 from src.extraction import extract_message_from_video
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -57,14 +58,12 @@ class VideoPreviewDialog(QtWidgets.QDialog):
         fps = self.cap.get(cv2.CAP_PROP_FPS) or 0
         fps = fps if fps and fps > 1e-2 else 30.0
         self.interval_ms = int(max(15, 1000.0 / fps))
-
         self.label = QtWidgets.QLabel()
         self.label.setAlignment(QtCore.Qt.AlignCenter)
         self.label.setMinimumSize(320, 240)
         layout = QtWidgets.QVBoxLayout()
         layout.addWidget(self.label)
         self.setLayout(layout)
-
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self._next_frame)
         self.timer.start(self.interval_ms)
@@ -133,10 +132,6 @@ def create_preview_column(title: str, placeholder: str, min_width: int = 320, mi
 
 
 def create_hist_panel(min_width: int = 320, min_height: int = 170):
-    """Create the RGB histogram panel with two preview columns.
-
-    Returns: (hist_widget, orig_hist_label, stego_hist_label)
-    """
     hist_widget = QtWidgets.QWidget()
     hist_widget.setObjectName("histCard")
     hist_layout = QtWidgets.QVBoxLayout(hist_widget)
@@ -165,6 +160,50 @@ def create_hist_panel(min_width: int = 320, min_height: int = 170):
     hist_layout.addLayout(hist_stego_block)
     hist_widget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
     return hist_widget, orig_hist_label, stego_hist_label
+
+
+def quick_video_capacity_bits(video_path: str) -> int:
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise IOError(f"Tidak bisa membuka video: {video_path}")
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cap.release()
+    if frame_count <= 0 or width <= 0 or height <= 0:
+        raise ValueError("Video tidak memiliki dimensi/frames yang valid")
+    return frame_count * width * height * 3
+
+
+def estimate_payload_bits(
+    payload_type: str,
+    text_content: str,
+    file_path: str,
+    encrypt_payload: bool,
+    mode: str,
+) -> int:
+    norm_type = "text" if payload_type == "text" else "file"
+    if norm_type == "text":
+        data_bytes = text_content.encode("utf-8")
+        data_size = len(data_bytes)
+        filename = ""
+    else:
+        if not file_path or not os.path.isfile(file_path):
+            return 0
+        data_size = os.path.getsize(file_path)
+        filename = os.path.basename(file_path)
+
+    meta = {
+        "type": norm_type,
+        "filename": filename if norm_type == "file" else "",
+        "size": data_size,
+        "encrypted": bool(encrypt_payload),
+        "mode": "random" if mode == "random" else "sequential",
+    }
+    meta_bytes = json.dumps(meta).encode("utf-8")
+    header_len = len(MAGIC) + 4 + len(meta_bytes)
+    total_bytes = header_len + data_size
+    return total_bytes * 8
 
 
 def render_histogram_pixmap(hist_data: dict) -> QtGui.QPixmap:
@@ -199,10 +238,6 @@ def render_histogram_pixmap(hist_data: dict) -> QtGui.QPixmap:
 
 
 def update_metrics_ui(target, metrics: dict):
-    """Update metrics label and histogram pixmaps on a target widget.
-
-    The target is expected to have attributes: `metrics_label`, `orig_hist_label`, `stego_hist_label`.
-    """
     if not metrics:
         return
     capacity = metrics.get("capacity_bits", 0)
@@ -502,12 +537,33 @@ class EmbedTab(QtWidgets.QWidget):
             self._input_error()
             return
 
+        try:
+            capacity_bits = quick_video_capacity_bits(video_path)
+            payload_bits = estimate_payload_bits(payload_type, text_content, file_payload_path, encrypt_payload, mode)
+            if payload_bits > capacity_bits:
+                self._show_capacity_warning(capacity_bits, payload_bits)
+                return
+        except Exception:
+            pass
+
         self._stop_comparison_preview()
         self._set_busy(True)
         self.embed_worker = StegoWorker(insert_message_to_video, video_path=video_path, payload_type=payload_type, text_content=text_content, file_path=file_payload_path, encrypt_payload=encrypt_payload, a51_key=a51_key, mode=mode, stego_key=stego_key, preferred_codec=codec, output_dir=OUTPUT_VIDEO_DIR, output_ext="_stego.avi")
         self.embed_worker.finished.connect(self._on_embed_finished)
         self.embed_worker.error.connect(self._on_embed_error)
         self.embed_worker.start()
+
+    def _show_capacity_warning(self, capacity_bits: int, payload_bits: int):
+        cap_bytes = capacity_bits / 8
+        pay_bytes = payload_bits / 8
+        QtWidgets.QMessageBox.warning(
+            self,
+            "Payload melebihi kapasitas",
+            (
+                f"Payload ({pay_bytes:,.0f} bytes) lebih besar dari kapasitas video ({cap_bytes:,.0f} bytes).\n"
+                "Kurangi ukuran pesan atau pilih video dengan kapasitas lebih besar."
+            ),
+        )
 
     def _stop_comparison_preview(self):
         if self.preview_timer.isActive():
@@ -617,7 +673,19 @@ class EmbedTab(QtWidgets.QWidget):
     def _on_embed_error(self, message: str):
         self._set_busy(False)
         self.embed_worker = None
-        QtWidgets.QMessageBox.critical(self, "Error", f"Something went wrong. Please check your input.\n{message}")
+        warn_prefix = "Payload terlalu besar"
+        if message and warn_prefix.lower() in message.lower():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Payload melebihi kapasitas",
+                "Payload lebih besar dari kapasitas video. Kurangi ukuran pesan atau pilih video dengan kapasitas lebih besar.\n\n" + message,
+            )
+        else:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Error",
+                f"Something went wrong. Please check your input.\n{message}",
+            )
 
 
 class ExtractTab(QtWidgets.QWidget):
