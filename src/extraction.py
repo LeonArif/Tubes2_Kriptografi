@@ -27,11 +27,11 @@ class PayloadHeader:
 def bits_to_bytes(bits: List[int]) -> bytes:
 	out = bytearray()
 	for i in range(0, len(bits), 8):
+		slice_bits = bits[i : i + 8]
 		byte = 0
-		for j in range(8):
-			byte <<= 1
-			if i + j < len(bits):
-				byte |= bits[i + j] & 1
+		for b in slice_bits:
+			byte = (byte << 1) | (b & 1)
+		byte <<= max(0, 8 - len(slice_bits))
 		out.append(byte)
 	return bytes(out)
 
@@ -50,8 +50,7 @@ def collect_lsb_stream(stego_video_path: str) -> Tuple[List[int], int]:
 		if frame_capacity == 0:
 			h, w, _ = frame.shape
 			frame_capacity = h * w * 3
-		flat = frame.reshape(-1)
-		lsb_stream.extend([int(v) & 1 for v in flat])
+		lsb_stream.extend(int(v) & 1 for v in frame.reshape(-1))
 
 	cap.release()
 	if frame_capacity == 0:
@@ -71,7 +70,6 @@ def normalize_save_path(typed_path: str, output_dir: str, default_path: str) -> 
 		return default_path
 	if os.path.isabs(typed_path):
 		return typed_path
-	# Relative path from prompt is stored inside output_dir, not current working directory.
 	return os.path.join(output_dir, typed_path)
 
 
@@ -109,8 +107,7 @@ def read_bits_by_mode(
 	if stego_key is None:
 		raise ValueError("Stego-key wajib untuk membaca mode random")
 
-	if random_map_cache is None:
-		random_map_cache = {}
+	random_map_cache = random_map_cache or {}
 
 	bits: List[int] = []
 	for payload_idx in range(start_payload_idx, end_payload_idx):

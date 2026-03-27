@@ -18,11 +18,7 @@ MAGIC = b"STEG"
 
 
 def bytes_to_bits(data: bytes) -> List[int]:
-	bits: List[int] = []
-	for byte in data:
-		for i in range(8):
-			bits.append((byte >> (7 - i)) & 1)
-	return bits
+	return [(byte >> (7 - i)) & 1 for byte in data for i in range(8)]
 
 
 def calculate_capacity(frames) -> int:
@@ -56,13 +52,8 @@ def build_payload(
 		"mode": "random" if mode == "random" else "sequential",
 	}
 	meta_bytes = json.dumps(metadata).encode("utf-8")
-
-	header = bytearray()
-	header += MAGIC
-	header += len(meta_bytes).to_bytes(4, "big")
-	header += meta_bytes
-
-	return bytes(header) + payload_bytes
+	header = MAGIC + len(meta_bytes).to_bytes(4, "big") + meta_bytes
+	return header + payload_bytes
 
 
 def read_video_frames(video_path: str):
@@ -103,11 +94,13 @@ def embed_payload_bits(
 		raise ValueError("Stego-key wajib diisi untuk mode random")
 
 	if mode == "sequential":
-		for bit_index, bit in enumerate(payload_bits):
-			frame_idx = bit_index // frame_capacity
-			pixel_idx = bit_index % frame_capacity
-			flat = frames[frame_idx].reshape(-1)
-			flat[pixel_idx] = (int(flat[pixel_idx]) & ~1) | bit
+		for frame_idx, frame in enumerate(frames):
+			start = frame_idx * frame_capacity
+			if start >= len(payload_bits):
+				break
+			flat = frame.reshape(-1)
+			for local_idx, bit in enumerate(payload_bits[start : start + frame_capacity]):
+				flat[local_idx] = (int(flat[local_idx]) & ~1) | bit
 		return
 
 	bit_index = 0
@@ -116,14 +109,11 @@ def embed_payload_bits(
 			break
 
 		positions = list(range(frame_capacity))
-		rng = random.Random(f"{stego_key}:{frame_idx}")
-		rng.shuffle(positions)
-
+		rng = random.Random(f"{stego_key}:{frame_idx}"); rng.shuffle(positions)
 		flat = frame.reshape(-1)
 		bits_this_frame = min(frame_capacity, len(payload_bits) - bit_index)
-		for local_idx in range(bits_this_frame):
+		for local_idx, bit in enumerate(payload_bits[bit_index : bit_index + bits_this_frame]):
 			pixel_idx = positions[local_idx]
-			bit = payload_bits[bit_index + local_idx]
 			flat[pixel_idx] = (int(flat[pixel_idx]) & ~1) | bit
 
 		bit_index += bits_this_frame
@@ -155,12 +145,10 @@ def compute_rgb_hist(frames) -> dict:
 	if not frames:
 		raise ValueError("Video kosong sehingga histogram tidak bisa dihitung")
 
-	hist = {"b": np.zeros(256, dtype=np.int64), "g": np.zeros(256, dtype=np.int64), "r": np.zeros(256, dtype=np.int64)}
+	hist = {k: np.zeros(256, dtype=np.int64) for k in ("b", "g", "r")}
 	for frame in frames:
 		for idx, key in enumerate(("b", "g", "r")):
-			channel_hist = cv2.calcHist([frame], [idx], None, [256], [0, 256]).flatten().astype(np.int64)
-			hist[key] += channel_hist
-
+			hist[key] += cv2.calcHist([frame], [idx], None, [256], [0, 256]).flatten().astype(np.int64)
 	return {k: v.tolist() for k, v in hist.items()}
 
 
@@ -177,10 +165,7 @@ def write_video_frames(
 	parent = os.path.dirname(output_path)
 	if parent:
 		os.makedirs(parent, exist_ok=True)
-	codec_candidates = ["FFV1", "HFYU"]
-	if preferred_codec:
-		# Try the preferred codec first while still falling back to defaults.
-		codec_candidates = [preferred_codec] + [c for c in codec_candidates if c != preferred_codec]
+	codec_candidates = [preferred_codec] + [c for c in ["FFV1", "HFYU"] if c != preferred_codec] if preferred_codec else ["FFV1", "HFYU"]
 	out = None
 	selected_codec = None
 

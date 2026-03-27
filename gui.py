@@ -6,7 +6,6 @@ import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
 from src.insertion import insert_message_to_video
 from src.extraction import extract_message_from_video
-from gui_mp4_tab import Mp4BonusTab
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 VIDEO_DIR = os.path.join(BASE_DIR, "video")
@@ -17,121 +16,33 @@ os.makedirs(OUTPUT_VIDEO_DIR, exist_ok=True)
 os.makedirs(OUTPUT_MESSAGE_DIR, exist_ok=True)
 
 
-def show_video_preview(parent: QtWidgets.QWidget, path: str):
-    if not path:
-        QtWidgets.QMessageBox.warning(parent, "Preview", "Pilih video terlebih dahulu.")
-        return
-    if not os.path.isfile(path):
-        QtWidgets.QMessageBox.critical(parent, "Preview", "File video tidak ditemukan.")
-        return
-    try:
-        dialog = VideoPreviewDialog(path, parent)
-    except Exception as exc:
-        QtWidgets.QMessageBox.critical(parent, "Preview", f"Gagal membuka video: {exc}")
-        return
-    dialog.resize(640, 480)
-    dialog.exec_()
+class PrimaryButton(QtWidgets.QPushButton):
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, parent)
+        self.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
+        self.setObjectName("primaryBtn")
+        self._base_geom = None
+        self.installEventFilter(self)
 
+    def eventFilter(self, obj, event):
+        if obj is self:
+            if event.type() == QtCore.QEvent.Enter:
+                self._start_scale(1.03)
+            elif event.type() == QtCore.QEvent.Leave:
+                self._start_scale(1.0)
+        return super().eventFilter(obj, event)
 
-class EmbedWorker(QtCore.QThread):
-    finished = QtCore.pyqtSignal(dict)
-    error = QtCore.pyqtSignal(str)
-
-    def __init__(
-        self,
-        *,
-        video_path: str,
-        payload_type: str,
-        text_content: str,
-        file_path: str,
-        encrypt_payload: bool,
-        a51_key: str,
-        mode: str,
-        stego_key: str,
-        codec: str,
-        output_dir: str,
-    ):
-        super().__init__()
-        self.video_path = video_path
-        self.payload_type = payload_type
-        self.text_content = text_content
-        self.file_path = file_path
-        self.encrypt_payload = encrypt_payload
-        self.a51_key = a51_key
-        self.mode = mode
-        self.stego_key = stego_key
-        self.codec = codec
-        self.output_dir = output_dir
-        self._tmp_path = None
-
-    def run(self):
-        try:
-            os.makedirs(self.output_dir, exist_ok=True)
-            base_name = os.path.splitext(os.path.basename(self.video_path))[0] or "output"
-            output_path = os.path.join(self.output_dir, f"{base_name}_stego.avi")
-
-            if self.payload_type == "text":
-                with tempfile.NamedTemporaryFile("w", delete=False, suffix=".txt", encoding="utf-8") as tmp:
-                    tmp.write(self.text_content)
-                    self._tmp_path = tmp.name
-                secret_path = self._tmp_path
-            else:
-                secret_path = self.file_path
-
-            result = insert_message_to_video(
-                video_path=self.video_path,
-                secret_path=secret_path,
-                output_path=output_path,
-                payload_type=self.payload_type,
-                encrypt_payload=self.encrypt_payload,
-                a51_key=self.a51_key,
-                mode=self.mode,
-                stego_key=self.stego_key,
-                preferred_codec=self.codec,
-            )
-
-            self.finished.emit(result)
-        except Exception as exc:
-            self.error.emit(str(exc))
-        finally:
-            if self._tmp_path and os.path.exists(self._tmp_path):
-                os.remove(self._tmp_path)
-
-
-class ExtractWorker(QtCore.QThread):
-    finished = QtCore.pyqtSignal(dict)
-    error = QtCore.pyqtSignal(str)
-
-    def __init__(
-        self,
-        *,
-        stego_video_path: str,
-        a51_key: str,
-        stego_key: str,
-        save_as: str,
-        output_dir: str,
-    ):
-        super().__init__()
-        self.stego_video_path = stego_video_path
-        self.a51_key = a51_key
-        self.stego_key = stego_key
-        self.save_as = save_as
-        self.output_dir = output_dir
-
-    def run(self):
-        try:
-            os.makedirs(self.output_dir, exist_ok=True)
-            result = extract_message_from_video(
-                stego_video_path=self.stego_video_path,
-                a51_key=self.a51_key,
-                stego_key=self.stego_key,
-                save_as_path=self.save_as,
-                output_dir=self.output_dir,
-                prompt_save_as=False,
-            )
-            self.finished.emit(result)
-        except Exception as exc:
-            self.error.emit(str(exc))
+    def _start_scale(self, scale: float):
+        self._base_geom = self.geometry()
+        geom = self._base_geom
+        w = geom.width()
+        h = geom.height()
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+        dx = (new_w - w) // 2
+        dy = (new_h - h) // 2
+        target = QtCore.QRect(geom.x() - dx, geom.y() - dy, new_w, new_h)
+        self.setGeometry(target)
 
 
 class VideoPreviewDialog(QtWidgets.QDialog):
@@ -172,13 +83,7 @@ class VideoPreviewDialog(QtWidgets.QDialog):
         bytes_per_line = ch * w
         qimg = QtGui.QImage(rgb.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
         pix = QtGui.QPixmap.fromImage(qimg)
-        self.label.setPixmap(
-            pix.scaled(
-                self.label.size(),
-                QtCore.Qt.KeepAspectRatio,
-                QtCore.Qt.SmoothTransformation,
-            )
-        )
+        self.label.setPixmap(pix.scaled(self.label.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
 
     def closeEvent(self, event):
         if self.timer.isActive():
@@ -188,32 +93,180 @@ class VideoPreviewDialog(QtWidgets.QDialog):
         super().closeEvent(event)
 
 
-class PrimaryButton(QtWidgets.QPushButton):
-    def __init__(self, text: str, parent=None):
-        super().__init__(text, parent)
-        self.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
-        self.setObjectName("primaryBtn")
-        self._base_geom = None
-        self.installEventFilter(self)
+def show_video_preview(parent: QtWidgets.QWidget, path: str):
+    if not path:
+        QtWidgets.QMessageBox.warning(parent, "Preview", "Pilih video terlebih dahulu.")
+        return
+    if not os.path.isfile(path):
+        QtWidgets.QMessageBox.critical(parent, "Preview", "File video tidak ditemukan.")
+        return
+    try:
+        dialog = VideoPreviewDialog(path, parent)
+    except Exception as exc:
+        QtWidgets.QMessageBox.critical(parent, "Preview", f"Gagal membuka video: {exc}")
+        return
+    dialog.resize(640, 480)
+    dialog.exec_()
 
-    def eventFilter(self, obj, event):
-        if obj is self:
-            if event.type() == QtCore.QEvent.Enter:
-                self._start_scale(1.03)
-            elif event.type() == QtCore.QEvent.Leave:
-                self._start_scale(1.0)
-        return super().eventFilter(obj, event)
 
-    def _start_scale(self, scale: float):
-        self._base_geom = self.geometry()
-        geom = self._base_geom
-        w = geom.width()
-        h = geom.height()
-        new_w = int(w * scale)
-        new_h = int(h * scale)
-        dx = (new_w - w) // 2
-        dy = (new_h - h) // 2
-        target = QtCore.QRect(geom.x() - dx, geom.y() - dy, new_w, new_h)
+def create_preview_column(title: str, placeholder: str, min_width: int = 320, min_height: int = 170):
+    title_label = QtWidgets.QLabel(title)
+    title_label.setObjectName("previewTitle")
+    title_label.setAlignment(QtCore.Qt.AlignCenter)
+    preview_label = QtWidgets.QLabel(placeholder)
+    preview_label.setObjectName("videoPreviewEmbed")
+    preview_label.setAlignment(QtCore.Qt.AlignCenter)
+    preview_label.setMinimumWidth(min_width)
+    preview_label.setMinimumHeight(min_height)
+    preview_label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+    preview_label.setStyleSheet("border: 2px dashed #FFD21F; background: #FBF5DB; border-radius: 8px;")
+    info_label = QtWidgets.QLabel("")
+    info_label.setAlignment(QtCore.Qt.AlignCenter)
+    info_label.setFixedHeight(0)
+    title_label.setContentsMargins(0, 0, 0, 0)
+    preview_label.setContentsMargins(0, 0, 0, 0)
+    layout = QtWidgets.QVBoxLayout()
+    layout.addWidget(title_label)
+    layout.addWidget(preview_label, stretch=1)
+    layout.addWidget(info_label)
+    return layout, preview_label, info_label
+
+
+def create_hist_panel(min_width: int = 320, min_height: int = 170):
+    """Create the RGB histogram panel with two preview columns.
+
+    Returns: (hist_widget, orig_hist_label, stego_hist_label)
+    """
+    hist_widget = QtWidgets.QWidget()
+    hist_widget.setObjectName("histCard")
+    hist_layout = QtWidgets.QVBoxLayout(hist_widget)
+    hist_layout.setContentsMargins(16, 12, 16, 12)
+    hist_layout.setSpacing(10)
+    hist_title = QtWidgets.QLabel("〽 RGB Histogram 〽")
+    hist_title.setAlignment(QtCore.Qt.AlignCenter)
+    hist_title.setObjectName("sectionTitle")
+    hist_title.setStyleSheet("background: transparent; color: #FBF5DB;")
+
+    hist_orig_block, orig_hist_label, _ = create_preview_column(
+        "Original Histogram",
+        "Original histogram will appear here",
+        min_width=min_width,
+        min_height=min_height,
+    )
+    hist_stego_block, stego_hist_label, _ = create_preview_column(
+        "Stego Histogram",
+        "Stego histogram will appear here",
+        min_width=min_width,
+        min_height=min_height,
+    )
+
+    hist_layout.addWidget(hist_title)
+    hist_layout.addLayout(hist_orig_block)
+    hist_layout.addLayout(hist_stego_block)
+    hist_widget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+    return hist_widget, orig_hist_label, stego_hist_label
+
+
+def render_histogram_pixmap(hist_data: dict) -> QtGui.QPixmap:
+    canvas_h, canvas_w = 180, 256
+    img = np.zeros((canvas_h, canvas_w, 3), dtype=np.uint8)
+    if not hist_data:
+        qimg = QtGui.QImage(img.data, canvas_w, canvas_h, 3 * canvas_w, QtGui.QImage.Format_RGB888).copy()
+        return QtGui.QPixmap.fromImage(qimg)
+
+    max_val = 0
+    for key in ("b", "g", "r"):
+        arr = hist_data.get(key)
+        if arr is not None and len(arr) > 0:
+            max_val = max(max_val, int(max(arr)))
+
+    colors = {"b": (255, 0, 0), "g": (0, 255, 0), "r": (0, 0, 255)}
+    max_val = max_val or 1
+    for key in ("b", "g", "r"):
+        arr = hist_data.get(key)
+        if arr is None:
+            continue
+        values = np.array(arr[:256], dtype=np.float32)
+        values = values / max_val
+        for x in range(1, min(256, len(values))):
+            y1 = canvas_h - 1 - int(values[x - 1] * (canvas_h - 5))
+            y2 = canvas_h - 1 - int(values[x] * (canvas_h - 5))
+            cv2.line(img, (x - 1, y1), (x, y2), colors[key], 1)
+
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    qimg = QtGui.QImage(rgb.data, canvas_w, canvas_h, 3 * canvas_w, QtGui.QImage.Format_RGB888).copy()
+    return QtGui.QPixmap.fromImage(qimg)
+
+
+def update_metrics_ui(target, metrics: dict):
+    """Update metrics label and histogram pixmaps on a target widget.
+
+    The target is expected to have attributes: `metrics_label`, `orig_hist_label`, `stego_hist_label`.
+    """
+    if not metrics:
+        return
+    capacity = metrics.get("capacity_bits", 0)
+    payload = metrics.get("payload_bits", 0)
+    mse = metrics.get("mse", 0.0)
+    psnr = metrics.get("psnr", 0.0)
+    try:
+        target.metrics_label.setText(f"MSE: {mse:.6f} | PSNR: {psnr:.2f} dB | Capacity: {capacity} bit / Payload: {payload} bit")
+    except Exception:
+        pass
+    try:
+        target.orig_hist_label.setPixmap(render_histogram_pixmap(metrics.get("hist_original")))
+        target.stego_hist_label.setPixmap(render_histogram_pixmap(metrics.get("hist_stego")))
+    except Exception:
+        pass
+
+
+def frame_to_pixmap(frame, target_label: QtWidgets.QLabel) -> QtGui.QPixmap:
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    h, w, ch = rgb.shape
+    qimg = QtGui.QImage(rgb.data, w, h, ch * w, QtGui.QImage.Format_RGB888)
+    pix = QtGui.QPixmap.fromImage(qimg)
+    return pix.scaled(target_label.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+
+
+class StegoWorker(QtCore.QThread):
+    finished = QtCore.pyqtSignal(object)
+    error = QtCore.pyqtSignal(str)
+
+    def __init__(self, backend_func, **params):
+        super().__init__()
+        self.backend_func = backend_func
+        self.params = params
+        self._tmp_path = None
+
+    def run(self):
+        try:
+            out_dir = self.params.get("output_dir")
+            if out_dir:
+                os.makedirs(out_dir, exist_ok=True)
+
+            payload_type = self.params.get("payload_type")
+            if payload_type == "text":
+                text_content = self.params.get("text_content", "")
+                with tempfile.NamedTemporaryFile("w", delete=False, suffix=".txt", encoding="utf-8") as tmp:
+                    tmp.write(text_content)
+                    self._tmp_path = tmp.name
+                self.params["secret_path"] = self._tmp_path
+            else:
+                if "file_path" in self.params and self.params.get("file_path"):
+                    self.params["secret_path"] = self.params.get("file_path")
+
+            if "output_path" not in self.params and self.params.get("video_path") and self.params.get("output_dir"):
+                base_name = os.path.splitext(os.path.basename(self.params.get("video_path")))[0] or "output"
+                ext = self.params.get("output_ext", "_stego.avi")
+                self.params["output_path"] = os.path.join(self.params.get("output_dir"), f"{base_name}{ext}")
+
+            result = self.backend_func(**self.params)
+            self.finished.emit(result)
+        except Exception as exc:
+            self.error.emit(str(exc))
+        finally:
+            if self._tmp_path and os.path.exists(self._tmp_path):
+                os.remove(self._tmp_path)
 
 
 class EmbedTab(QtWidgets.QWidget):
@@ -246,11 +299,11 @@ class EmbedTab(QtWidgets.QWidget):
         self.stego_key_edit = QtWidgets.QLineEdit(); self.stego_key_edit.setEnabled(False); self.stego_key_edit.setPlaceholderText("Enter stego-key")
         self.codec_combo = QtWidgets.QComboBox(); self.codec_combo.addItems(["FFV1", "HFYU"]); self.codec_combo.setCurrentText("FFV1")
         self.start_btn = PrimaryButton("ᯓ➤ Embed ✮⋆˙"); self.start_btn.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed); self.start_btn.setMinimumWidth(340)
-        orig_block, self.original_preview_label, self.original_info_label = self._create_preview_column("[ ▶︎ ] Original Video", "Original preview will appear here")
-        stego_block, self.stego_preview_label, self.stego_info_label = self._create_preview_column("[ ▶︎ ] Stego Video", "Stego preview will appear here")
+        orig_block, self.original_preview_label, self.original_info_label = create_preview_column("Original Video", "Original preview will appear here", min_width=320, min_height=170)
+        stego_block, self.stego_preview_label, self.stego_info_label = create_preview_column("Stego Video", "Stego preview will appear here", min_width=320, min_height=170)
         comparison_widget = QtWidgets.QWidget(); comparison_widget.setObjectName("comparisonCard")
         comparison_layout = QtWidgets.QVBoxLayout(comparison_widget); comparison_layout.setSpacing(12); comparison_layout.setContentsMargins(16, 12, 16, 12)
-        comparison_title = QtWidgets.QLabel("⇄ Before vs After Comparison ⇄"); comparison_title.setAlignment(QtCore.Qt.AlignCenter); comparison_title.setObjectName("sectionTitle"); comparison_title.setStyleSheet("background: transparent; color: #FBF5DB;")
+        comparison_title = QtWidgets.QLabel("⇄ Comparison ⇄"); comparison_title.setAlignment(QtCore.Qt.AlignCenter); comparison_title.setObjectName("sectionTitle"); comparison_title.setStyleSheet("background: transparent; color: #FBF5DB;")
         comparison_layout.addWidget(comparison_title)
         comparison_layout.addLayout(orig_block)
         comparison_layout.addLayout(stego_block)
@@ -259,13 +312,23 @@ class EmbedTab(QtWidgets.QWidget):
         self.metrics_label = QtWidgets.QLabel("MSE: - | PSNR: - dB | Capacity: - / Payload: -")
         self.metrics_label.setAlignment(QtCore.Qt.AlignCenter)
         self.metrics_label.setObjectName("metricsLabel")
-        self.metrics_label.setStyleSheet("font-weight: 600; color: #3F3A33;")
+        self.metrics_label.setStyleSheet("font-weight: 600; color: #76944C;")
 
         hist_widget = QtWidgets.QWidget(); hist_widget.setObjectName("histCard")
         hist_layout = QtWidgets.QVBoxLayout(hist_widget); hist_layout.setContentsMargins(16, 12, 16, 12); hist_layout.setSpacing(10)
         hist_title = QtWidgets.QLabel("〽 RGB Histogram 〽"); hist_title.setAlignment(QtCore.Qt.AlignCenter); hist_title.setObjectName("sectionTitle"); hist_title.setStyleSheet("background: transparent; color: #FBF5DB;")
-        hist_orig_block, self.orig_hist_label, _ = self._create_preview_column("Original Histogram", "Original histogram will appear here")
-        hist_stego_block, self.stego_hist_label, _ = self._create_preview_column("Stego Histogram", "Stego histogram will appear here")
+        hist_orig_block, self.orig_hist_label, _ = self._create_preview_column(
+            "Original Histogram",
+            "Original histogram will appear here",
+            min_width=320,
+            min_height=170,
+        )
+        hist_stego_block, self.stego_hist_label, _ = self._create_preview_column(
+            "Stego Histogram",
+            "Stego histogram will appear here",
+            min_width=320,
+            min_height=170,
+        )
         hist_layout.addWidget(hist_title)
         hist_layout.addLayout(hist_orig_block)
         hist_layout.addLayout(hist_stego_block)
@@ -334,28 +397,8 @@ class EmbedTab(QtWidgets.QWidget):
     def _input_error(self):
         QtWidgets.QMessageBox.critical(self, "Error", "Something went wrong. Please check your input.")
 
-    def _create_preview_column(self, title: str, placeholder: str):
-        title_label = QtWidgets.QLabel(title)
-        title_label.setObjectName("previewTitle")
-        title_label.setAlignment(QtCore.Qt.AlignCenter)
-        preview_label = QtWidgets.QLabel(placeholder)
-        preview_label.setObjectName("videoPreviewEmbed")
-        preview_label.setAlignment(QtCore.Qt.AlignCenter)
-        preview_label.setMinimumWidth(320)
-        preview_label.setFixedHeight(170)
-        preview_label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
-        preview_label.setStyleSheet("border: 2px dashed #FFD21F; background: #FBF5DB; border-radius: 8px;")
-        info_label = QtWidgets.QLabel("")
-        info_label.setAlignment(QtCore.Qt.AlignCenter)
-        info_label.setFixedHeight(0)
-        title_label.setContentsMargins(0, 0, 0, 0)
-        preview_label.setContentsMargins(0, 0, 0, 0)
-        layout = QtWidgets.QVBoxLayout()
-        layout.addWidget(title_label)
-        layout.addWidget(preview_label, stretch=1)
-        layout.addWidget(info_label)
-
-        return layout, preview_label, info_label
+    def _create_preview_column(self, title: str, placeholder: str, min_width: int = 320, min_height: int = 170):
+        return create_preview_column(title, placeholder, min_width=min_width, min_height=min_height)
 
     def _render_histogram(self, hist_data: dict) -> QtGui.QPixmap:
         canvas_h, canvas_w = 180, 256
@@ -394,9 +437,7 @@ class EmbedTab(QtWidgets.QWidget):
         payload = metrics.get("payload_bits", 0)
         mse = metrics.get("mse", 0.0)
         psnr = metrics.get("psnr", 0.0)
-        self.metrics_label.setText(
-            f"MSE: {mse:.6f} | PSNR: {psnr:.2f} dB | Capacity: {capacity} bit / Payload: {payload} bit"
-        )
+        self.metrics_label.setText(f"MSE: {mse:.6f} | PSNR: {psnr:.2f} dB | Capacity: {capacity} bit / Payload: {payload} bit")
         self.orig_hist_label.setPixmap(self._render_histogram(metrics.get("hist_original")))
         self.stego_hist_label.setPixmap(self._render_histogram(metrics.get("hist_stego")))
 
@@ -457,19 +498,7 @@ class EmbedTab(QtWidgets.QWidget):
 
         self._stop_comparison_preview()
         self._set_busy(True)
-
-        self.embed_worker = EmbedWorker(
-            video_path=video_path,
-            payload_type=payload_type,
-            text_content=text_content,
-            file_path=file_payload_path,
-            encrypt_payload=encrypt_payload,
-            a51_key=a51_key,
-            mode=mode,
-            stego_key=stego_key,
-            codec=codec,
-            output_dir=OUTPUT_VIDEO_DIR,
-        )
+        self.embed_worker = StegoWorker(insert_message_to_video, video_path=video_path, payload_type=payload_type, text_content=text_content, file_path=file_payload_path, encrypt_payload=encrypt_payload, a51_key=a51_key, mode=mode, stego_key=stego_key, preferred_codec=codec, output_dir=OUTPUT_VIDEO_DIR, output_ext="_stego.avi")
         self.embed_worker.finished.connect(self._on_embed_finished)
         self.embed_worker.error.connect(self._on_embed_error)
         self.embed_worker.start()
@@ -526,7 +555,6 @@ class EmbedTab(QtWidgets.QWidget):
     def _next_comparison_frame(self):
         if self.original_cap is None or self.stego_cap is None:
             return
-
         ret_orig, frame_orig = self.original_cap.read()
         ret_stego, frame_stego = self.stego_cap.read()
 
@@ -537,29 +565,10 @@ class EmbedTab(QtWidgets.QWidget):
                 self.stego_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             return
 
-        rgb_orig = cv2.cvtColor(frame_orig, cv2.COLOR_BGR2RGB)
-        h1, w1, ch1 = rgb_orig.shape
-        qimg_orig = QtGui.QImage(rgb_orig.data, w1, h1, ch1 * w1, QtGui.QImage.Format_RGB888)
-        pix_orig = QtGui.QPixmap.fromImage(qimg_orig)
-        self.original_preview_label.setPixmap(
-            pix_orig.scaled(
-                self.original_preview_label.size(),
-                QtCore.Qt.KeepAspectRatio,
-                QtCore.Qt.SmoothTransformation,
-            )
-        )
-
-        rgb_stego = cv2.cvtColor(frame_stego, cv2.COLOR_BGR2RGB)
-        h2, w2, ch2 = rgb_stego.shape
-        qimg_stego = QtGui.QImage(rgb_stego.data, w2, h2, ch2 * w2, QtGui.QImage.Format_RGB888)
-        pix_stego = QtGui.QPixmap.fromImage(qimg_stego)
-        self.stego_preview_label.setPixmap(
-            pix_stego.scaled(
-                self.stego_preview_label.size(),
-                QtCore.Qt.KeepAspectRatio,
-                QtCore.Qt.SmoothTransformation,
-            )
-        )
+        pix_orig = frame_to_pixmap(frame_orig, self.original_preview_label)
+        self.original_preview_label.setPixmap(pix_orig)
+        pix_stego = frame_to_pixmap(frame_stego, self.stego_preview_label)
+        self.stego_preview_label.setPixmap(pix_stego)
 
     def _set_busy(self, busy: bool):
         if busy:
@@ -597,11 +606,7 @@ class EmbedTab(QtWidgets.QWidget):
         output_path = result.get("output_path", "") if isinstance(result, dict) else ""
         self._update_metrics(result if isinstance(result, dict) else {})
         self._start_comparison_preview(original_path=self.video_path_edit.text().strip(), stego_path=output_path)
-        QtWidgets.QMessageBox.information(
-            self,
-            "Success",
-            f"Process completed successfully!\nSaved to:\n{output_path}",
-        )
+        QtWidgets.QMessageBox.information(self, "Success", f"Process completed successfully!\nSaved to:\n{output_path}")
 
     def _on_embed_error(self, message: str):
         self._set_busy(False)
@@ -701,14 +706,7 @@ class ExtractTab(QtWidgets.QWidget):
         self._last_saved_dir = None
         self._set_result_visible(text_visible=True, file_visible=True)
         self._set_busy(True)
-
-        self.extract_worker = ExtractWorker(
-            stego_video_path=stego_video_path,
-            a51_key=a51_key,
-            stego_key=stego_key,
-            save_as=save_as,
-            output_dir=OUTPUT_MESSAGE_DIR,
-        )
+        self.extract_worker = StegoWorker(extract_message_from_video, stego_video_path=stego_video_path, a51_key=a51_key, stego_key=stego_key, save_as_path=save_as, output_dir=OUTPUT_MESSAGE_DIR, prompt_save_as=False)
         self.extract_worker.finished.connect(self._on_extract_finished)
         self.extract_worker.error.connect(self._on_extract_error)
         self.extract_worker.start()
@@ -788,8 +786,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("➤ II4021 - Kriptografi ✉︎")
-        self.resize(1200, 760)
-        self.setMinimumSize(960, 700)
+        self.setFixedSize(1200, 760)
         self._apply_style()
         self._build_ui()
 
@@ -800,6 +797,7 @@ class MainWindow(QtWidgets.QMainWindow):
         tabs = QtWidgets.QTabWidget()
         tabs.addTab(EmbedTab(), "⌯⌲ Embed")
         tabs.addTab(ExtractTab(), "🗁 Extract")
+        from gui_mp4_tab import Mp4BonusTab
         tabs.addTab(Mp4BonusTab(), "[◉°] MP4 Bonus")
         layout = QtWidgets.QVBoxLayout()
         layout.addWidget(header)
@@ -867,13 +865,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
             QPushButton#browseBtn {
                 background: #F3D13F;
-                color: #3F3A33;
+                color: #76944C;
                 border: 1px solid #76944C;
             }
 
             QPushButton#previewBtn {
                 background: #C2B5AC;
-                color: #3F3A33;
+                color: #76944C;
                 border: 1px solid #76944C;
             }
 
@@ -914,6 +912,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 background: #FFD21F;
                 border-radius: 8px;
                 width: 8px;
+            }
+
+            QMessageBox QLabel, QMessageBox QLabel QLabel {
+                color: #76944C;
             }
             """
         )
