@@ -240,27 +240,33 @@ class StegoWorker(QtCore.QThread):
 
     def run(self):
         try:
-            out_dir = self.params.get("output_dir")
+            params = dict(self.params)
+            out_dir = params.get("output_dir")
             if out_dir:
                 os.makedirs(out_dir, exist_ok=True)
 
-            payload_type = self.params.get("payload_type")
+            payload_type = params.get("payload_type")
             if payload_type == "text":
-                text_content = self.params.get("text_content", "")
+                text_content = params.get("text_content", "")
                 with tempfile.NamedTemporaryFile("w", delete=False, suffix=".txt", encoding="utf-8") as tmp:
                     tmp.write(text_content)
                     self._tmp_path = tmp.name
-                self.params["secret_path"] = self._tmp_path
-            else:
-                if "file_path" in self.params and self.params.get("file_path"):
-                    self.params["secret_path"] = self.params.get("file_path")
+                params["secret_path"] = self._tmp_path
+            elif params.get("file_path"):
+                params["secret_path"] = params.get("file_path")
 
-            if "output_path" not in self.params and self.params.get("video_path") and self.params.get("output_dir"):
-                base_name = os.path.splitext(os.path.basename(self.params.get("video_path")))[0] or "output"
-                ext = self.params.get("output_ext", "_stego.avi")
-                self.params["output_path"] = os.path.join(self.params.get("output_dir"), f"{base_name}{ext}")
+            params.pop("text_content", None)
+            params.pop("file_path", None)
 
-            result = self.backend_func(**self.params)
+            if "output_path" not in params and params.get("video_path") and params.get("output_dir"):
+                base_name = os.path.splitext(os.path.basename(params.get("video_path")))[0] or "output"
+                ext = params.get("output_ext", "_stego.avi")
+                params["output_path"] = os.path.join(params.get("output_dir"), f"{base_name}{ext}")
+
+            params.pop("output_dir", None)
+            params.pop("output_ext", None)
+
+            result = self.backend_func(**params)
             self.finished.emit(result)
         except Exception as exc:
             self.error.emit(str(exc))
@@ -798,7 +804,7 @@ class MainWindow(QtWidgets.QMainWindow):
         tabs.addTab(EmbedTab(), "⌯⌲ Embed")
         tabs.addTab(ExtractTab(), "🗁 Extract")
         from gui_mp4_tab import Mp4BonusTab
-        tabs.addTab(Mp4BonusTab(), "[◉°] MP4 Bonus")
+        tabs.addTab(Mp4BonusTab(), "◉° MP4 Bonus")
         layout = QtWidgets.QVBoxLayout()
         layout.addWidget(header)
         layout.addStretch(1)
