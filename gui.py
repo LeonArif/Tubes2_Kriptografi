@@ -10,8 +10,8 @@ from src.extraction import extract_message_from_video
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 VIDEO_DIR = os.path.join(BASE_DIR, "video")
-OUTPUT_VIDEO_DIR = os.path.join(BASE_DIR, "output_video")
-OUTPUT_MESSAGE_DIR = os.path.join(BASE_DIR, "output_pesan")
+OUTPUT_VIDEO_DIR = os.path.join(BASE_DIR, "test/output_video")
+OUTPUT_MESSAGE_DIR = os.path.join(BASE_DIR, "test/output_pesan")
 
 os.makedirs(OUTPUT_VIDEO_DIR, exist_ok=True)
 os.makedirs(OUTPUT_MESSAGE_DIR, exist_ok=True)

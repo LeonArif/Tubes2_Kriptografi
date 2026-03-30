@@ -14,6 +14,8 @@ except ImportError:
 
 MAGIC = b"STEG"
 
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUTPUT_MESSAGE_DIR = os.path.join(BASE_DIR, "test/output_pesan")
 
 @dataclass
 class PayloadHeader:
@@ -185,7 +187,7 @@ def extract_message_from_video(
 	a51_key: Optional[str] = None,
 	stego_key: Optional[str] = None,
 	save_as_path: Optional[str] = None,
-	output_dir: str = "output",
+	output_dir: str = OUTPUT_MESSAGE_DIR,
 	prompt_save_as: bool = True,
 ):
 	lsb_stream, frame_capacity = collect_lsb_stream(stego_video_path)
